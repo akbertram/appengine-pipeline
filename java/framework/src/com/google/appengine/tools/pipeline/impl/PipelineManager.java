@@ -14,6 +14,14 @@
 
 package com.google.appengine.tools.pipeline.impl;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
 import com.google.appengine.api.datastore.Key;
 import com.google.appengine.api.datastore.KeyFactory;
 import com.google.appengine.api.taskqueue.TaskAlreadyExistsException;
@@ -42,16 +50,9 @@ import com.google.appengine.tools.pipeline.impl.tasks.FinalizeJobTask;
 import com.google.appengine.tools.pipeline.impl.tasks.HandleSlotFilledTask;
 import com.google.appengine.tools.pipeline.impl.tasks.RunJobTask;
 import com.google.appengine.tools.pipeline.impl.tasks.Task;
+import com.google.appengine.tools.pipeline.impl.test.FakeFutureValue;
 import com.google.appengine.tools.pipeline.impl.util.GUIDGenerator;
 import com.google.appengine.tools.pipeline.impl.util.StringUtils;
-
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.List;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 /**
  * The central hub of the Pipeline implementation.
@@ -505,6 +506,40 @@ public class PipelineManager {
     return runMethod;
   }
 
+  public static Object invokeImmediately(Job<?> jobInstance, Object[] params) {
+    Method runMethod = findAppropriateRunMethod(jobInstance.getClass(), params);
+    try {
+      return unwrapValue( (Value) runMethod.invoke(jobInstance, params) );
+    } catch (Exception e) {
+      throw new RuntimeException("Exception invoking run method for " + jobInstance.toString(), e);
+    }
+  }
+
+  public static Object unwrapValue(Value wrappedValue) {
+    if(wrappedValue instanceof ImmediateValue) {
+      return ((ImmediateValue)wrappedValue).getValue();
+    } else if(wrappedValue instanceof FakeFutureValue) {
+      return ((FakeFutureValue)wrappedValue).getValue();
+    } else if(wrappedValue instanceof FutureList) {
+      List list = new ArrayList();
+      for(Object listElement : ((FutureList)wrappedValue).getListOfValues()) {
+        list.add(unwrapValue((Value) listElement));
+      }
+      return list;
+    } else {
+      throw new IllegalArgumentException("don't know how to unpack value for testing " +
+           "purposes: " + wrappedValue);
+    }
+  }
+
+  public static Object[] unwrapValues(Object[] params) {
+    Object[] values = new Object[params.length];
+    for(int i=0;i!=values.length;++i) {
+      values[i] = unwrapValue((Value) params[i]);
+    }
+    return values;
+  }
+  
   private static void setJobRecord(Job<?> jobObject, JobRecord jobRecord) {
     invokePrivateJobMethod("setJobRecord", jobObject, jobRecord);
   }

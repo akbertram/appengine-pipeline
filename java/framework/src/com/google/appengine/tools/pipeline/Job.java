@@ -14,15 +14,21 @@
 
 package com.google.appengine.tools.pipeline;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
+import java.util.List;
+
 import com.google.appengine.api.datastore.Key;
 import com.google.appengine.tools.pipeline.impl.FutureValueImpl;
 import com.google.appengine.tools.pipeline.impl.PipelineManager;
 import com.google.appengine.tools.pipeline.impl.PromisedValueImpl;
 import com.google.appengine.tools.pipeline.impl.backend.UpdateSpec;
 import com.google.appengine.tools.pipeline.impl.model.JobRecord;
-
-import java.io.Serializable;
-import java.util.List;
+import com.google.appengine.tools.pipeline.impl.test.FakeFutureValue;
+import com.google.appengine.tools.pipeline.impl.util.SerializationUtils;
 
 /**
  * The abstract ancestor class of all user job classes. A <b>job</b> is by
@@ -91,6 +97,8 @@ public abstract class Job<E> implements Serializable {
   private transient UpdateSpec updateSpec;
   private transient String currentRunGUID;
 
+  public static boolean TESTING = false;
+  
   // This method will be invoked by reflection from PipelineManager
   @SuppressWarnings("unused")
   private void setJobRecord(JobRecord jobRecord) {
@@ -132,11 +140,37 @@ public abstract class Job<E> implements Serializable {
    */
   protected <T> FutureValue<T> futureCallUnchecked(JobSetting[] settings, Job<?> jobInstance,
       Object... params) {
-    JobRecord childJobRecord =
-        PipelineManager.registerNewJobRecord(updateSpec, settings, thisJobRecord, currentRunGUID,
-            jobInstance, params);
-    thisJobRecord.appendChildKey(childJobRecord.getKey());
-    return new FutureValueImpl<T>(childJobRecord.getOutputSlotInflated());
+
+    if(!TESTING) {
+
+      JobRecord childJobRecord =
+          PipelineManager.registerNewJobRecord(updateSpec, settings, thisJobRecord, currentRunGUID,
+              jobInstance, params);
+      thisJobRecord.appendChildKey(childJobRecord.getKey());
+      return new FutureValueImpl<T>(childJobRecord.getOutputSlotInflated());
+    } else {
+
+      // test serialization
+      try {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ObjectOutputStream oos = new ObjectOutputStream(baos);
+        oos.writeObject(jobInstance);
+        oos.flush();
+        
+        ObjectInputStream ois = new ObjectInputStream(
+            new ByteArrayInputStream(baos.toByteArray()));
+        Job<?> deserializedJob = (Job<?>)
+            SerializationUtils.deserialize(
+            SerializationUtils.serialize(jobInstance));
+     
+        Object[] paramValues = PipelineManager.unwrapValues(params);
+        
+        return new FakeFutureValue(PipelineManager.invokeImmediately(deserializedJob, paramValues));
+        
+      } catch(Exception e) {
+        throw new RuntimeException(e);
+      }
+    }
   }
 
   /**
